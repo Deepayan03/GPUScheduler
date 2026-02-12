@@ -1,12 +1,15 @@
-# job.py
+"""
+job.py
 
-# Job model used by the scheduler.
+Advanced Job model used by the scheduler.
 
-# Provides:
-# - JobStatus (Enum)
-# - Job dataclass (id, command, priority, status, timestamps, pid)
-# - toDict() / fromDict() helpers for persistence
-# - toJson() / fromJson() convenience methods
+Supports:
+- Multi-GPU requirements
+- Memory constraints
+- Preemption flags
+- Runtime limits
+- Dynamic GPU assignment
+"""
 
 from __future__ import annotations
 
@@ -15,107 +18,110 @@ import uuid
 import json
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Optional,Dict, Any
+from typing import Optional, Dict, Any
 
 
 class JobStatus(Enum):
-#  Enum representing lifecycle state of a Job.
-# Use strings as values so serialization to JSON is straightforward.   
-    QUEUED="queued"
-    RUNNING="running"
-    PAUSED="paused"
-    FINISHED="finished"
-    FAILED="failed"
-    CANCELLED="cancelled"
+    QUEUED = "queued"
+    RUNNING = "running"
+    PAUSED = "paused"
+    FINISHED = "finished"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
+@dataclass
 class Job:
-    # Job model for scheduler.
-    # Fields (camelCase):
-    #   - id: unique string id (uuid4)
-    #   - command: shell command (str)
-    #   - priority: int (lower -> higher priority)
-    #   - status: JobStatus
-    #   - createdAt: epoch float
-    #   - startedAt: Optional[float]
-    #   - finishedAt: Optional[float]
-    #   - pid: Optional[int]  # PID of running process (set by runner)
-    #   - meta: dict for optional user metadata (e.g., owner, workspace)
+    # Core identity
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    command: str = ""
+    priority: int = 10
 
-    id:str = field(default_factory=lambda:str(uuid.uuid4()))
-    command:str = ""
-    priority:int = 10
-    status:JobStatus = JobStatus.QUEUED
+    # Resource requirements
+    requiredGpus: int = 1
+    requiredMemMb: Optional[int] = None
+    exclusive: bool = True
+
+    # Runtime controls
+    preemptible: bool = True
+    maxRuntimeSeconds: Optional[int] = None
+
+    # Dynamic assignment (set by scheduler)
+    assignedGpu: Optional[int] = None
+
+    # Lifecycle state
+    status: JobStatus = JobStatus.QUEUED
     createdAt: float = field(default_factory=time.time)
     startedAt: Optional[float] = None
     finishedAt: Optional[float] = None
-    pid:Optional[int] = None
-    meta: Dict[str,Any] = field(default_factory=dict)
+    pid: Optional[int] = None
 
+    # Optional user metadata
+    meta: Dict[str, Any] = field(default_factory=dict)
 
-# -------helpers--------
+    # ----------------------------------------------------
+    # Serialization
+    # ----------------------------------------------------
 
-    def toDict(self) -> Dict[str,Any]:
-        # Convert to plain dict (JSON-serializable).
-        # Enums are converted to their value strings.
+    def toDict(self) -> Dict[str, Any]:
         d = asdict(self)
-        d["status"] = self.status.value if isinstance(self.status, JobStatus) else str(self.status)
+        d["status"] = self.status.value
         return d
-    
-    @staticmethod
-    def fromDict(d:Dict[str,Any]) ->"Job":
-        #  Create a Job from a dict produced by toDict().
-        # Expects keys matching the Job dataclass fields.
-        js=dict(d) # shallow copying
-        #Convert status string back to job status
-        statusVal = js.get("status", JobStatus.QUEUED.value)
-        try:
-            js["status"] = JobStatus(statusVal)
-        except ValueError:
-            js["status"] = JobStatus.QUEUED
 
+    @staticmethod
+    def fromDict(d: Dict[str, Any]) -> "Job":
         return Job(
-            id = js.get("id",str(uuid.uuid4())),
-            command = js.get("command",""),
-            priority = int(js.get("priority" , 10)),
-            status=js["status"],
-            createdAt=float(js.get("createdAt", time.time())),
-            startedAt=(float(js["startedAt"]) if js.get("startedAt") is not None else None),
-            finishedAt=(float(js["finishedAt"]) if js.get("finishedAt") is not None else None),
-            pid=(int(js["pid"]) if js.get("pid") is not None else None),
-            meta=js.get("meta", {}),
+            id=d.get("id", str(uuid.uuid4())),
+            command=d.get("command", ""),
+            priority=int(d.get("priority", 10)),
+            requiredGpus=int(d.get("requiredGpus", 1)),
+            requiredMemMb=d.get("requiredMemMb"),
+            exclusive=bool(d.get("exclusive", True)),
+            preemptible=bool(d.get("preemptible", True)),
+            maxRuntimeSeconds=d.get("maxRuntimeSeconds"),
+            assignedGpu=d.get("assignedGpu"),
+            status=JobStatus(d.get("status", "queued")),
+            createdAt=float(d.get("createdAt", time.time())),
+            startedAt=d.get("startedAt"),
+            finishedAt=d.get("finishedAt"),
+            pid=d.get("pid"),
+            meta=d.get("meta", {}),
         )
-    def toJson(self) -> str:
-        # return compact json string for storage
-        return json.dumps(self.toDict(), separators=(",", ":"), ensure_ascii=False)
-    
-    @staticmethod
-    def fromJson(s:"str") ->"Job":
-        d= json.loads(s)
-        return Job.fromDict(d)
-    
 
-    def markStarted(self, pid: int) -> None:
-        """
-        Mark job as running and set PID and startedAt timestamp.
-        """
+    def toJson(self) -> str:
+        return json.dumps(self.toDict())
+
+    @staticmethod
+    def fromJson(s: str) -> "Job":
+        return Job.fromDict(json.loads(s))
+
+    # ----------------------------------------------------
+    # State transitions
+    # ----------------------------------------------------
+
+    def markStarted(self, pid: int, gpuIndex: int) -> None:
         self.pid = int(pid)
         self.status = JobStatus.RUNNING
         self.startedAt = time.time()
+        self.assignedGpu = gpuIndex
 
     def markFinished(self, success: bool = True) -> None:
-        """
-        Mark job finished (FINISHED or FAILED) and set finishedAt.
-        """
         self.finishedAt = time.time()
         self.pid = None
+        self.assignedGpu = None
         self.status = JobStatus.FINISHED if success else JobStatus.FAILED
 
     def markCancelled(self) -> None:
-        """
-        Mark job cancelled by user.
-        """
         self.finishedAt = time.time()
         self.pid = None
+        self.assignedGpu = None
         self.status = JobStatus.CANCELLED
 
+    # ----------------------------------------------------
+    # Runtime helpers
+    # ----------------------------------------------------
+
+    def hasExceededRuntime(self) -> bool:
+        if self.maxRuntimeSeconds is None or self.startedAt is None:
+            return False
+        return (time.time() - self.startedAt) > self.maxRuntimeSeconds
