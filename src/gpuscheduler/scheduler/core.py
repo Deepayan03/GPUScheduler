@@ -1,173 +1,260 @@
 """
 core.py
 
-Single-threaded deterministic scheduler core.
+Event-driven SchedulerCore.
 
-Orchestrates:
-- Monitor
-- Policy
-- QueueManager
-- Runner
-- StateMachine
+Features:
+- Condition-variable based scheduling loop
+- Immediate wake on job submission
+- Immediate wake on job completion
+- Hybrid preemption
+- Clean lifecycle handling
 """
 
 from __future__ import annotations
 
-import time
 import threading
-from typing import Dict, List
+import time
+from typing import List, Optional
 
-from gpuscheduler.daemon.monitor import Monitor
 from gpuscheduler.daemon import runner
-from gpuscheduler.daemon.job import Job
+from gpuscheduler.daemon.job import Job, JobStatus
 from gpuscheduler.scheduler.queueManager import QueueManager
-from gpuscheduler.scheduler.policy import SchedulerPolicy
+from gpuscheduler.scheduler.policy import SchedulingPolicy
 from gpuscheduler.scheduler.stateMachine import JobStateMachine
+from gpuscheduler.daemon.monitor import Monitor
 
 
 class SchedulerCore:
 
-    def __init__(self, pollInterval: float = 2.0):
-        self.pollInterval = pollInterval
+    def __init__(self, gpuIndices: Optional[List[int]] = None):
+        self.gpuIndices = gpuIndices or [0]
 
-        self.monitor = Monitor(pollInterval=2.0)
         self.queueManager = QueueManager()
-        self.policy = SchedulerPolicy()
+        self.policy = SchedulingPolicy()
 
+        self.monitor = Monitor(
+            pollInterval=2.0,
+            callback=self._onMonitorUpdate,
+            utilDeltaThreshold=10.0,
+        )
+
+        self._condition = threading.Condition()
         self._stop = False
-        self._lock = threading.Lock()
+
+    def _onMonitorUpdate(self, snapshot):
+        # Wake scheduler when GPU stats change
+        with self._condition:
+            self._condition.notify()
 
     # ----------------------------------------------------
     # Public API
     # ----------------------------------------------------
 
     def submitJob(self, job: Job) -> None:
-        self.queueManager.addJob(job)
+        with self._condition:
+            self.queueManager.addJob(job)
+            self._condition.notify()
 
     def stop(self) -> None:
-        self._stop = True
-
-    # ----------------------------------------------------
-    # GPU Helpers
-    # ----------------------------------------------------
-
-    def _getGpuIndices(self, snapshot: Dict) -> List[int]:
-        backend = snapshot.get("backend")
-
-        if backend == "nvidia-smi":
-            return [g["index"] for g in snapshot.get("gpus", [])]
-
-        if backend == "powermetrics":
-            return [0]
-
-        return []
-
-    def _getGpuUtil(self, snapshot: Dict, gpuIndex: int) -> float:
-        if snapshot.get("backend") == "nvidia-smi":
-            for g in snapshot.get("gpus", []):
-                if g["index"] == gpuIndex:
-                    return g["gpuUtilPercent"]
-
-        if snapshot.get("backend") == "powermetrics":
-            return snapshot.get("gpuUtilPercent", 0.0)
-
-        return 0.0
+        with self._condition:
+            self._stop = True
+            self._condition.notify()
 
     # ----------------------------------------------------
     # Core Loop
     # ----------------------------------------------------
 
-    def run(self) -> None:
+    def run(self):
         print("Starting SchedulerCore...")
-
         self.monitor.start()
 
-        try:
-            while not self._stop:
+        while True:
 
-                snapshot = self.monitor.getLastStats()
+            with self._condition:
+                if self._stop:
+                    break
 
-                if snapshot is None:
-                    time.sleep(self.pollInterval)
+            # Phase 1: Check for finished jobs
+            finishedSomething = self._handleCompletions()
+
+            # Phase 2: Try preemption
+            preempted = self._handlePreemption()
+
+            if preempted:
+                continue  # restart loop cleanly
+
+            # Phase 3: Try scheduling new jobs
+            scheduled = self._handleScheduling()
+
+            # Wait for next event if nothing happened
+            if not (finishedSomething or scheduled):
+                with self._condition:
+                    self._condition.wait(timeout=2.0)
+
+        self.monitor.stop()
+        print("Scheduler stopped.")
+
+    def _wake(self) -> None:
+        with self._condition:
+            self._condition.notify()
+
+    # ----------------------------------------------------
+    # Completion Handling
+    # ----------------------------------------------------
+
+    def _handleCompletions(self) -> bool:
+        somethingChanged = False
+
+        for job in self.queueManager.getRunningJobs():
+            if job.pid is None:
+                continue
+
+            exitCode = runner.pollJob(job.pid)
+            if exitCode is not None:
+                JobStateMachine.finish(job)
+                self.queueManager.releaseJob(job)
+                somethingChanged = True
+
+                print(
+                    f"[{time.strftime('%H:%M:%S')}] "
+                    f"Job {job.id} finished with exit code {exitCode}"
+                )
+
+                self._wake()
+
+        return somethingChanged
+
+    # ----------------------------------------------------
+    # Preemption
+    # ----------------------------------------------------
+
+    def _handlePreemption(self) -> bool:
+        snapshot = self.monitor.getLastStats()
+        if snapshot is None:
+            return False
+
+        for gpuIndex in self.gpuIndices:
+            runningJobs = self.queueManager.getRunningJobsOnGpu(gpuIndex)
+            if not runningJobs:
+                continue
+
+            for runningJob in runningJobs:
+                if not runningJob.preemptible:
                     continue
 
-                gpuIndices = self._getGpuIndices(snapshot)
+                candidate = self.queueManager.peekHighestPriorityQueued()
+                if not candidate:
+                    continue
 
-                # ------------------------------------------------
-                # 1️⃣ Check running jobs
-                # ------------------------------------------------
+                currentUtil = self._getGpuUtil(snapshot, gpuIndex)
 
-                runningMap = self.queueManager.getRunningJobs()
+                if self.policy.shouldPreempt(
+                    gpuIndex,
+                    currentUtil,
+                    runningJob.priority,
+                    candidate.priority,
+                ):
+                    print(
+                        f"[{time.strftime('%H:%M:%S')}] "
+                        f"Preempting job {runningJob.id} "
+                        f"for higher priority job {candidate.id}"
+                    )
 
-                for gpuIndex, jobs in runningMap.items():
-                    for job in list(jobs):
+                    runner.terminateJob(runningJob.pid)
+                    JobStateMachine.pause(runningJob)
 
-                        if job.pid is None:
-                            continue
+                    self.queueManager.releaseJob(runningJob)
+                    self.queueManager.requeueJob(runningJob)
 
-                        # Check if job finished
-                        exitCode = runner.pollJob(job.pid)
+                    return True  # restart loop
 
-                        if exitCode is not None:
-                            self.queueManager.releaseJob(job)
-                            JobStateMachine.finish(job, success=(exitCode == 0))
-                            continue
+        return False
 
-                        # Watchdog enforcement
-                        if runner.checkRuntimeExceeded(job.pid):
-                            print(f"Watchdog: killing job {job.id}")
-                            runner.terminateJob(job.pid)
-                            self.queueManager.releaseJob(job)
-                            JobStateMachine.finish(job, success=False)
+    # ----------------------------------------------------
+    # Scheduling
+    # ----------------------------------------------------
 
-                # ------------------------------------------------
-                # 2️⃣ Try scheduling ONE job globally
-                # ------------------------------------------------
+    def _handleScheduling(self) -> bool:
+        snapshot = self.monitor.getLastStats()
 
-                allocation = self.queueManager.findAndAssignJob(gpuIndices)
+        allocation = self.queueManager.findAndAssignJob(self.gpuIndices)
+        if not allocation:
+            return False
 
-                if allocation:
-                    job, allocatedGpus = allocation
+        job, allocatedGpus = allocation
 
-                    # Check policy for all allocated GPUs
-                    allow = True
-                    for gpuIndex in allocatedGpus:
-                        currentUtil = self._getGpuUtil(snapshot, gpuIndex)
-                        if not self.policy.canScheduleOnGpu(
-                            gpuIndex,
-                            currentUtil,
-                        ):
-                            allow = False
-                            break
+        allow = True
+        if snapshot:
+            for gpuIndex in allocatedGpus:
+                util = self._getGpuUtil(snapshot, gpuIndex)
+                if not self.policy.canScheduleOnGpu(gpuIndex, util):
+                    allow = False
+                    break
 
-                    if allow:
-                        try:
-                            pid = runner.startJob(
-                                job,
-                                gpuIndex=allocatedGpus[0],
-                            )
+        if not allow:
+            return False
 
-                            job.pid = pid
-                            job.assignedGpu = allocatedGpus[0]
+        pid = runner.startJob(job, gpuIndex=allocatedGpus[0])
+        JobStateMachine.start(job)
+        job.pid = pid
+        job.assignedGpu = allocatedGpus[0]
 
-                            JobStateMachine.start(job)
+        print(
+            f"[{time.strftime('%H:%M:%S')}] "
+            f"Started job {job.id} "
+            f"on GPU {allocatedGpus}"
+        )
 
-                            print(f"[{time.strftime('%H:%M:%S')}] Started job {job.id} on GPU {allocatedGpus}")
+        return True
 
-                        except Exception as e:
-                            print(f"Failed to start job {job.id}: {e}")
-                            self.queueManager.releaseJob(job)
-                            JobStateMachine.finish(job, success=False)
+    # ----------------------------------------------------
+    # Helpers
+    # ----------------------------------------------------
 
-                    else:
-                        # Policy rejected scheduling
-                        self.queueManager.releaseJob(job)
+    def _getGpuUtil(self, snapshot, gpuIndex: int) -> float:
+        if snapshot.get("backend") == "nvidia-smi":
+            for g in snapshot.get("gpus", []):
+                if g["index"] == gpuIndex:
+                    return g.get("gpuUtilPercent", 0.0)
 
-                time.sleep(self.pollInterval)
+        if snapshot.get("backend") == "powermetrics":
+            return snapshot.get("gpuUtilPercent", 0.0)
 
-        except KeyboardInterrupt:
-            print("Scheduler interrupted.")
+        return 0.0
+    
+     # ----------------------------------------------------
+    # Job cancellations
+    # ----------------------------------------------------
+    
+    def cancelJob(self, jobId: str) -> bool:
+        """
+        Cancel a job by ID.
+        Returns True if job was found and cancelled.
+        """
 
-        finally:
-            self.monitor.stop()
-            print("Scheduler stopped.")
+        with self._condition:
+
+            # 1️⃣ Check queued jobs
+            for job in self.queueManager.getQueuedJobs():
+                if job.id == jobId:
+                    JobStateMachine.cancel(job)
+                    self.queueManager.removeJob(jobId)
+                    print(f"Cancelled queued job {jobId}")
+                    self._condition.notify()
+                    return True
+
+            # 2️⃣ Check running jobs
+            for job in self.queueManager.getRunningJobs():
+                if job.id == jobId:
+                    if job.pid:
+                        runner.terminateJob(job.pid)
+
+                    JobStateMachine.cancel(job)
+                    self.queueManager.releaseJob(job)
+
+                    print(f"Cancelled running job {jobId}")
+                    self._condition.notify()
+                    return True
+
+        return False

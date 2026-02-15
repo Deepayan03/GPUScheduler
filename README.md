@@ -1,237 +1,284 @@
 # 🚀 GPU Scheduler  
-## Load-Aware GPU Task Control for Single-Machine Systems
+## A Smart Traffic Controller for Your GPU
 
-> GPUs are powerful. They are not polite.  
-> GPU Scheduler makes them behave.
+> GPUs are powerful.  
+> But when too many jobs run together, they become chaotic.  
+> GPU Scheduler brings order.
 
 ---
 
-## 📖 The Story
+# 📖 The Story (Explained Simply)
 
-You’re training a deep learning model.
+Imagine this.
 
-Your GPU is already at 92%.
+You are training a deep learning model.  
+It is using almost all your GPU.
 
-You quickly launch a small inference script.  
-Or a visualization tool.  
-Or another experiment.
+Then you quickly open another script.  
+Maybe a small experiment.  
+Maybe a visualization tool.  
+Maybe a quick inference test.
 
 Suddenly:
 
-• Training slows down  
-• Memory allocation fails  
-• CUDA errors appear  
-• System responsiveness drops  
+- Training becomes slow  
+- GPU memory errors appear  
+- The system feels laggy  
+- Your experiment crashes  
 
-The GPU didn’t fail because it’s weak.  
-It failed because it was overloaded.
+Your GPU is not weak.  
+It is overloaded.
 
-Unlike CPUs, GPUs are designed for throughput — not multitasking.  
-They do not gracefully handle overload in single-machine environments.
+The problem is simple:
 
-And on most personal systems, nothing regulates *when* GPU tasks start.
+On most personal machines, nothing decides **when GPU jobs should start**.
 
-That’s the real problem.
+Everything starts immediately.
 
----
+And that creates chaos.
 
-## 🎯 The Core Problem
-
-When GPU utilization approaches full capacity:
-
-• Memory allocation becomes fragile  
-• Kernel launch latency increases  
-• Throughput becomes unpredictable  
-• Even lightweight tasks may fail  
-
-Operating systems handle CPU scheduling well.  
-But GPU execution start timing is largely unmanaged.
-
-Cluster schedulers like Slurm solve this at scale.  
-They are heavyweight and built for multi-node clusters.
-
-There is a gap for lightweight scheduling on standalone machines.
+GPU Scheduler solves this.
 
 ---
 
-## 💡 The Idea
+# 🎯 What Is GPU Scheduler?
 
-GPU Scheduler asks one simple question before launching any task:
+GPU Scheduler is a small background program.
 
-> “Is it safe to start this right now?”
+It runs quietly and controls GPU jobs.
 
-If yes → allow execution.  
-If no → wait.
+It decides:
 
-There is no kernel interruption.  
-No GPU driver modification.  
-No forced preemption.
+- Which job runs first  
+- Which job must wait  
+- When a running job should stop  
+- When a higher priority job should take over  
 
-Just intelligent admission control.
+Think of it like a traffic signal for GPU tasks.
 
----
+Without traffic signals, cars crash.
 
-## 🏗 System Architecture
-
-<p align="center">
-  <img src="assets/architecture.png" width="850"/>
-</p>
-
-
-
-Core components:
-
-User / Application  
-Priority Task Queue  
-Scheduler Engine  
-Monitoring Daemon  
-Resource Estimator  
-GPU Hardware  
-Execution Logs  
-
-The daemon continuously monitors GPU utilization.  
-The scheduler makes admission decisions.  
-The queue manages waiting tasks by priority.
-
-The GPU itself remains untouched.
+Without scheduling, GPU jobs interfere.
 
 ---
 
-## 🔄 How It Works
+# 🧠 The Core Idea (In One Sentence)
 
-1. A background daemon continuously tracks GPU utilization  
-2. It detects both scheduled and externally launched GPU tasks  
-3. The system estimates how much GPU a new task will require  
-4. Effective load is calculated with safety headroom  
-5. If total load stays below threshold (85–90%), the task runs  
-6. Otherwise, the task waits  
-7. When GPU load drops, waiting tasks are admitted  
+Before starting any GPU job, the system asks:
 
-This is preventive scheduling — not reactive fixing.
+"Is it safe to run this right now?"
 
----
+If yes → it runs.  
+If no → it waits.
 
-## ⚙ Scheduling Strategy
-
-Priority-Based Scheduling  
-Load-Aware Admission Control  
-Non-Preemptive Execution  
-
-Tasks are ordered by importance.
-
-Priority influences queue order, but never overrides safety thresholds.
-
-Once a task starts, it runs without interruption.
+If something more important arrives → it makes space.
 
 ---
 
-## 📈 Why Cap Utilization at 85–90%?
+# ⚙️ What The Current System Can Do
 
-Running GPUs at absolute 100% sounds efficient.  
-In practice, it can be fragile.
+This version already supports:
 
-Sustained 100% utilization increases:
+- Priority-based scheduling  
+- Background daemon (runs continuously)  
+- Event-driven decision engine  
+- Multi-GPU support (basic)  
+- Preemption (stop low priority job for high priority job)  
+- Resume stopped jobs  
+- Cancel running jobs  
+- Real-time job status  
+- File-based CLI control  
+- Job lifecycle state machine  
 
-• Power draw  
-• Temperature  
-• Memory contention  
-• Clock fluctuation under thermal or power constraints  
-
-Maintaining utilization headroom:
-
-• Reduces sustained thermal stress  
-• Minimizes clock instability under long workloads  
-• Absorbs short load spikes  
-• Improves performance consistency  
-• Prevents unpredictable slowdowns  
-
-The goal is not limiting performance.  
-The goal is maintaining stability under pressure.
+This is not a simple script.  
+It is a real scheduling system.
 
 ---
 
-## 🖥 CPU vs GPU Scheduling Reality
+# 🔄 How It Works (Step By Step)
 
-CPUs:
-• Lightweight preemption  
-• Small execution state  
-• Frequent context switching  
+Here is the full flow:
 
-GPUs:
-• Thousands of parallel threads  
-• Large execution state  
-• Expensive preemption  
-• Throughput-optimized design  
+1. The scheduler daemon starts.
+2. It begins monitoring GPU usage.
+3. You submit a job.
+4. The job enters a priority queue.
+5. The scheduler checks:
+   - Current GPU utilization
+   - Memory safety
+   - Job priority
+6. If safe → job starts.
+7. If not safe → job waits.
+8. If a higher priority job arrives:
+   - The running job may be stopped.
+   - The higher priority job runs.
+   - The previous job resumes later.
 
-Stopping a CPU task is easy.  
-Stopping a GPU task mid-kernel is complex and costly.
-
-So instead of interrupting GPU work,  
-GPU Scheduler controls when tasks begin.
-
----
-
-## 🔬 Optional: Cooperative Training Support
-
-For long-running ML workloads:
-
-Training can run inside a wrapper that supports checkpointing.
-
-When necessary:
-
-• The scheduler requests a safe pause  
-• The model saves progress  
-• A lightweight task executes  
-• Training resumes from the last checkpoint  
-
-This is cooperative, application-level scheduling —  
-not GPU-level preemption.
+Everything happens automatically.
 
 ---
 
-## 🔍 Real-World Use Cases
+# 🏗 System Architecture
 
-• Deep learning experimentation on personal workstations  
-• Running inference safely alongside training  
-• Shared single-GPU research environments  
-• Preventing crashes from accidental concurrent launches  
-• Managing GPU workloads without cluster infrastructure  
+Below is a simplified architecture diagram.
+  ![Architecture](assets/architecture.png)
 
 ---
 
-## 🏆 Why This Matters
+# 🧩 Main Components Explained Simply
 
-Cluster schedulers solve GPU scheduling at data center scale.
+Daemon  
+Runs forever in background.
 
-GPU Scheduler brings structured workload control to:
+Queue Manager  
+Stores jobs and sorts them by priority.
 
-• Developer laptops  
-• Research workstations  
-• Small labs  
-• Personal ML setups  
+Scheduler Core  
+Makes decisions.
 
-It applies operating systems principles to GPU resource management in a lightweight, practical way.
+Monitor  
+Checks GPU utilization.
 
----
+Policy Engine  
+Applies safety rules.
 
-## 🛠 Future Directions
-
-Adaptive utilization tuning  
-Predictive resource modeling  
-Monitoring dashboard  
-Multi-user fairness policies  
-Container-aware scheduling  
-Integration with ML experiment pipelines  
+Runner  
+Starts and stops processes using OS signals.
 
 ---
 
-## 📚 Concepts Demonstrated
+# 🔁 What Is Preemption?
 
-Operating Systems Scheduling  
-Admission Control Algorithms  
-Daemon-Based Monitoring  
-GPU Resource Management  
-Performance Stability Engineering  
-Systems Architecture Design  
+Preemption means:
+
+A less important job can be stopped so a more important job can run.
+
+Example story:
+
+You start training a model (low priority).  
+Then your boss asks for urgent inference results (high priority).
+
+GPU Scheduler will:
+
+1. Stop the training job.
+2. Run the urgent inference.
+3. After it finishes, resume training.
+
+No manual intervention needed.
 
 ---
+
+# 🖥 Example Usage
+
+Start the scheduler:
+
+```bash
+sudo PYTHONPATH=src python3 -m gpuscheduler.serve
+```
+
+Submit a job:
+
+```bash
+PYTHONPATH=src python3 -m gpuscheduler.submit --cmd "sleep 10" --priority 5
+```
+
+Check status:
+
+```bash
+PYTHONPATH=src python3 -m gpuscheduler.status
+```
+
+Cancel a job:
+
+```bash
+PYTHONPATH=src python3 -m gpuscheduler.cancel --jobId <job-id>
+```
+
+---
+
+# 📸 Terminal Demo 
+
+## Starting the Scheduler
+
+![Start Scheduler Screenshot](assets/start_scheduler.png)
+
+---
+
+## Submitting Jobs
+
+![Submit Job Screenshot](assets/submit_job.png)
+
+---
+
+## Preemption Example
+
+![Preemption Screenshot](assets/preemption.png)
+
+---
+
+## Checking Status
+
+![Status Screenshot](assets/status.png)
+
+## Job Cancellation
+
+![Status Screenshot](assets/cancellation.png)
+
+---
+
+# 🧠 Why This Is Important
+
+Without scheduling:
+
+- GPU memory conflicts happen  
+- Jobs slow each other down  
+- Experiments crash  
+- Results become unstable  
+
+With GPU Scheduler:
+
+- Important jobs run first  
+- GPU load stays controlled  
+- Experiments become predictable  
+- System remains stable  
+
+---
+
+# 🧪 Concepts Demonstrated
+
+This project demonstrates:
+
+- Operating system scheduling  
+- Priority queues  
+- Event-driven architecture  
+- Multi-threaded programming  
+- Process control using signals  
+- Resource admission control  
+- State machine design  
+- GPU workload orchestration  
+
+---
+
+# 🛠 Future Improvements
+
+Possible next steps:
+
+- Memory-aware scheduling  
+- Smarter preemption scoring  
+- Fair scheduling across users  
+- Persistent job storage  
+- Live log streaming  
+- Web dashboard  
+- Multi-machine support  
+
+---
+
+# 💬 Final Thought
+
+GPUs are extremely powerful.
+
+But power without control leads to chaos.
+
+GPU Scheduler adds control.
+
+And that makes GPU workloads predictable, stable, and manageable.

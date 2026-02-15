@@ -19,17 +19,24 @@ class JobStateMachine:
 
     # Allowed transitions map
     _allowedTransitions = {
-        JobStatus.QUEUED: {JobStatus.RUNNING, JobStatus.CANCELLED},
+        JobStatus.QUEUED: {
+            JobStatus.RUNNING,
+            JobStatus.CANCELLED,
+        },
+
         JobStatus.RUNNING: {
             JobStatus.PAUSED,
             JobStatus.FINISHED,
             JobStatus.FAILED,
             JobStatus.CANCELLED,
+            JobStatus.QUEUED,  # ← allow requeue after preemption
         },
+
         JobStatus.PAUSED: {
             JobStatus.RUNNING,
             JobStatus.CANCELLED,
         },
+
         JobStatus.FINISHED: set(),
         JobStatus.FAILED: set(),
         JobStatus.CANCELLED: set(),

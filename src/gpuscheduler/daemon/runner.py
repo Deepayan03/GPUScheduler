@@ -18,6 +18,7 @@ import os
 import signal
 import subprocess
 import time
+import shlex
 from typing import Optional, Dict
 
 from gpuscheduler.daemon.job import Job
@@ -65,15 +66,16 @@ def startJob(job: Job, gpuIndex: int, logDir: str = DEFAULT_LOG_DIR) -> int:
 
     env = os.environ.copy()
 
-    # GPU binding for CUDA systems
     if gpuIndex is not None:
         env["CUDA_VISIBLE_DEVICES"] = str(gpuIndex)
+
+    # Properly split command into arguments
+    cmd = shlex.split(job.command)
 
     popenArgs = {
         "stdout": logFile,
         "stderr": subprocess.STDOUT,
         "stdin": subprocess.DEVNULL,
-        "shell": True,
         "env": env,
     }
 
@@ -86,7 +88,8 @@ def startJob(job: Job, gpuIndex: int, logDir: str = DEFAULT_LOG_DIR) -> int:
             0x00000200,
         )
 
-    proc = subprocess.Popen(job.command, **popenArgs)
+    # IMPORTANT: shell=False (default)
+    proc = subprocess.Popen(cmd, **popenArgs)
 
     pid = proc.pid
 
@@ -128,28 +131,18 @@ def sendSignal(pid: int, sig: int) -> bool:
 
 
 def pauseJob(pid: int) -> bool:
-    """
-    Hard pause using SIGSTOP (POSIX only).
-    """
     if os.name != "posix":
         return False
     return sendSignal(pid, signal.SIGSTOP)
 
 
 def resumeJob(pid: int) -> bool:
-    """
-    Resume paused job using SIGCONT.
-    """
     if os.name != "posix":
         return False
     return sendSignal(pid, signal.SIGCONT)
 
 
 def sendPreemptSignal(pid: int) -> bool:
-    """
-    Cooperative preemption signal.
-    Training code must handle SIGUSR1.
-    """
     if os.name != "posix":
         return False
     return sendSignal(pid, signal.SIGUSR1)

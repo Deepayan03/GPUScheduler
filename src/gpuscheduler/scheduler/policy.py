@@ -145,3 +145,6 @@ class SchedulerPolicy:
             return False
 
         return True
+    
+# Backward compatibility alias
+SchedulingPolicy = SchedulerPolicy
