@@ -1,32 +1,26 @@
 """
 cancel.py
 
-Submit a cancel request to the running scheduler daemon.
-Writes a cancel control file into control directory.
+Backward-compatible wrapper for `gpusched cancel`.
 """
 
 import argparse
-import json
-from pathlib import Path
+
+from gpuscheduler.cli import main as cliMain
 
 
-CONTROL_DIR = Path("control")
-
-
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--jobId", required=True)
+    parser.add_argument("--jobId", dest="job_id", default=None)
+    parser.add_argument("--job-id", dest="job_id_alt", default=None)
     args = parser.parse_args()
 
-    CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    jobId = args.job_id_alt or args.job_id
+    if not jobId:
+        parser.error("one of --jobId/--job-id is required")
 
-    filePath = CONTROL_DIR / f"cancel_{args.jobId}.json"
-
-    with open(filePath, "w") as f:
-        json.dump({"jobId": args.jobId}, f)
-
-    print(f"Cancel request submitted for {args.jobId}")
+    return cliMain(["cancel", "--job-id", jobId])
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

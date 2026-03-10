@@ -1,0 +1,6 @@
+{
+  "requiredProvider": "mock",
+  "requiredCcMode": "simulated",
+  "requiredDriverPrefix": "mock-1."
+}
+

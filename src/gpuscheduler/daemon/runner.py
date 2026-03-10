@@ -19,7 +19,7 @@ import signal
 import subprocess
 import time
 import shlex
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 from gpuscheduler.daemon.job import Job
 
@@ -55,7 +55,12 @@ def _getProcessGroupPid(pid: int) -> int:
 # Core Execution
 # ----------------------------------------------------
 
-def startJob(job: Job, gpuIndex: int, logDir: str = DEFAULT_LOG_DIR) -> int:
+def startJob(
+    job: Job,
+    gpuIndex: Optional[int] = None,
+    gpuIndices: Optional[List[int]] = None,
+    logDir: str = DEFAULT_LOG_DIR,
+) -> int:
     """
     Start job bound to specific GPU.
     """
@@ -66,8 +71,26 @@ def startJob(job: Job, gpuIndex: int, logDir: str = DEFAULT_LOG_DIR) -> int:
 
     env = os.environ.copy()
 
-    if gpuIndex is not None:
-        env["CUDA_VISIBLE_DEVICES"] = str(gpuIndex)
+    assignedGpuIndices: List[int] = []
+    if gpuIndices:
+        assignedGpuIndices = [int(g) for g in gpuIndices]
+    elif gpuIndex is not None:
+        assignedGpuIndices = [int(gpuIndex)]
+
+    if assignedGpuIndices:
+        env["CUDA_VISIBLE_DEVICES"] = ",".join(
+            str(g) for g in assignedGpuIndices
+        )
+        env["GPUSCHED_ASSIGNED_GPUS"] = env["CUDA_VISIBLE_DEVICES"]
+
+    if job.checkpointPath:
+        env["GPUSCHED_CHECKPOINT_PATH"] = str(job.checkpointPath)
+
+    resumeFrom = job.meta.get("resumeFromCheckpoint")
+    if isinstance(resumeFrom, str) and resumeFrom:
+        env["GPUSCHED_RESUME_FROM"] = resumeFrom
+
+    env["GPUSCHED_JOB_ID"] = job.id
 
     # Properly split command into arguments
     cmd = shlex.split(job.command)

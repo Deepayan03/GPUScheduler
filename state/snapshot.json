@@ -1,4 +1,64 @@
 {
-  "queued": [],
-  "running": []
+  "queued": [
+    {
+      "id": "df08b992-5767-4dc2-976d-4c9b4e7706ce",
+      "command": "sleep 20",
+      "priority": 10,
+      "requiredGpus": 1,
+      "requiredMemMb": 4000,
+      "exclusive": true,
+      "preemptible": true,
+      "maxRuntimeSeconds": null,
+      "trustPolicy": {},
+      "checkpointPath": null,
+      "assignedGpu": null,
+      "assignedGpus": [],
+      "status": "queued",
+      "createdAt": 1773174331.9373922,
+      "startedAt": null,
+      "finishedAt": null,
+      "pid": null,
+      "meta": {
+        "user": "alice",
+        "acprEnabled": false,
+        "preemptionCount": 0,
+        "runTimeConsumedSeconds": 0.0
+      },
+      "proofStatus": "disabled",
+      "proofChain": [],
+      "lastAttestation": null
+    }
+  ],
+  "running": [],
+  "terminal": [
+    {
+      "id": "d0b364e3-0411-4b95-b6d6-eb8162bacf82",
+      "command": "sleep 5",
+      "priority": 1,
+      "requiredGpus": 1,
+      "requiredMemMb": null,
+      "exclusive": true,
+      "preemptible": true,
+      "maxRuntimeSeconds": null,
+      "trustPolicy": {},
+      "checkpointPath": null,
+      "assignedGpu": null,
+      "assignedGpus": [],
+      "status": "finished",
+      "createdAt": 1773174344.529312,
+      "startedAt": 1773174345.392437,
+      "finishedAt": 1773174351.406023,
+      "pid": null,
+      "meta": {
+        "user": "bob",
+        "acprEnabled": false,
+        "preemptionCount": 0,
+        "runTimeConsumedSeconds": 6.01350998878479,
+        "resumeMode": "start"
+      },
+      "proofStatus": "disabled",
+      "proofChain": [],
+      "lastAttestation": null
+    }
+  ]
 }

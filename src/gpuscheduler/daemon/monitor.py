@@ -134,7 +134,8 @@ def powermetricsStats() -> Optional[Dict[str, Any]]:
     if isRoot:
         cmd = [pmPath, "--samplers", "gpu_power", "-n", "1"]
     else:
-        cmd = ["sudo", pmPath, "--samplers", "gpu_power", "-n", "1"]
+        # Non-interactive sudo prevents daemon hangs waiting for a password prompt.
+        cmd = ["sudo", "-n", pmPath, "--samplers", "gpu_power", "-n", "1"]
 
     out = runCmd(cmd, timeout=15.0)
     if not out:

@@ -68,6 +68,7 @@ class JobStateMachine:
             job.finishedAt = now
             job.pid = None
             job.assignedGpu = None
+            job.assignedGpus = []
 
     # ----------------------------------------------------
     # Convenience Wrappers

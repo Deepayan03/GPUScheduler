@@ -1,284 +1,218 @@
-# 🚀 GPU Scheduler  
-## A Smart Traffic Controller for Your GPU
+# GPU Scheduler v2
+## A Story-Driven GPU Orchestrator
 
-> GPUs are powerful.  
-> But when too many jobs run together, they become chaotic.  
-> GPU Scheduler brings order.
+> GPUs are fast.  
+> But fast without control becomes chaos.  
+> GPU Scheduler v2 exists to bring control first.
 
 ---
 
-# 📖 The Story (Explained Simply)
+## The Story
 
 Imagine this.
 
-You are training a deep learning model.  
-It is using almost all your GPU.
+You launch a long training run.  
+Then someone asks for urgent inference.  
+Then another script starts in the background.
 
-Then you quickly open another script.  
-Maybe a small experiment.  
-Maybe a visualization tool.  
-Maybe a quick inference test.
+Now your machine is not "busy".  
+It is confused.
 
-Suddenly:
+Jobs fight for memory.  
+Priority is unclear.  
+Work gets interrupted in the wrong order.
 
-- Training becomes slow  
-- GPU memory errors appear  
-- The system feels laggy  
-- Your experiment crashes  
+GPU Scheduler v2 is the layer that says:
 
-Your GPU is not weak.  
-It is overloaded.
-
-The problem is simple:
-
-On most personal machines, nothing decides **when GPU jobs should start**.
-
-Everything starts immediately.
-
-And that creates chaos.
-
-GPU Scheduler solves this.
+"One moment. We will run this properly."
 
 ---
 
-# 🎯 What Is GPU Scheduler?
+## What v2 Means Today
 
-GPU Scheduler is a small background program.
+v2 is the first version that is genuinely usable end-to-end from CLI.
 
-It runs quietly and controls GPU jobs.
+It is not a toy script anymore.
 
-It decides:
+It has:
 
-- Which job runs first  
-- Which job must wait  
-- When a running job should stop  
-- When a higher priority job should take over  
-
-Think of it like a traffic signal for GPU tasks.
-
-Without traffic signals, cars crash.
-
-Without scheduling, GPU jobs interfere.
-
----
-
-# 🧠 The Core Idea (In One Sentence)
-
-Before starting any GPU job, the system asks:
-
-"Is it safe to run this right now?"
-
-If yes → it runs.  
-If no → it waits.
-
-If something more important arrives → it makes space.
+- A unified operational CLI (`gpusched`)
+- Persistent state via SQLite
+- Daemon lifecycle controls (`start`, `stop`, `status`)
+- Recovery after daemon restarts
+- Priority + memory-aware scheduling
+- Multi-GPU launch support
+- Smart preemption victim scoring
+- Aging priority to reduce starvation
+- Fair-share user caps
+- Tunable placement strategies
+- True pause/resume preemption path (`SIGSTOP`/`SIGCONT` with restart fallback)
 
 ---
 
-# ⚙️ What The Current System Can Do
+## v2 Standpoint
 
-This version already supports:
+Where v2 is strong:
 
-- Priority-based scheduling  
-- Background daemon (runs continuously)  
-- Event-driven decision engine  
-- Multi-GPU support (basic)  
-- Preemption (stop low priority job for high priority job)  
-- Resume stopped jobs  
-- Cancel running jobs  
-- Real-time job status  
-- File-based CLI control  
-- Job lifecycle state machine  
+- Excellent for single-node GPU orchestration
+- Practical for research teams sharing limited GPUs
+- Reliable for day-to-day scheduling workflows
+- Good demonstration of systems design for production-minded interviews
 
-This is not a simple script.  
-It is a real scheduling system.
+Where v2 is intentionally still not "final SaaS":
 
----
+- No web control plane yet
+- No distributed multi-node scheduler yet
+- No enterprise auth/RBAC layer yet
+- Hardware attestation path is present but still evolving
 
-# 🔄 How It Works (Step By Step)
+Think of v2 as:
 
-Here is the full flow:
-
-1. The scheduler daemon starts.
-2. It begins monitoring GPU usage.
-3. You submit a job.
-4. The job enters a priority queue.
-5. The scheduler checks:
-   - Current GPU utilization
-   - Memory safety
-   - Job priority
-6. If safe → job starts.
-7. If not safe → job waits.
-8. If a higher priority job arrives:
-   - The running job may be stopped.
-   - The higher priority job runs.
-   - The previous job resumes later.
-
-Everything happens automatically.
+"Operational core is ready. Platform layer is next."
 
 ---
 
-# 🏗 System Architecture
+## Architecture Diagram (v2)
 
-Below is a simplified architecture diagram.
-  ![Architecture](assets/architecture.png)
+```mermaid
+flowchart LR
+    U[User / CI] --> C[gpusched CLI]
+    C -->|submit| I[inbox/*.json]
+    C -->|cancel| X[control/cancel_*.json]
+    C -->|status/logs| S[State + Logs]
 
----
+    D[Daemon: gpuscheduler.serve] --> I
+    D --> X
+    D --> K[SchedulerCore]
 
-# 🧩 Main Components Explained Simply
+    K --> Q[QueueManager]
+    K --> P[SchedulingPolicy]
+    K --> M[Monitor]
+    K --> R[Runner]
+    K --> A[ACPR / Proof Ledger]
 
-Daemon  
-Runs forever in background.
-
-Queue Manager  
-Stores jobs and sorts them by priority.
-
-Scheduler Core  
-Makes decisions.
-
-Monitor  
-Checks GPU utilization.
-
-Policy Engine  
-Applies safety rules.
-
-Runner  
-Starts and stops processes using OS signals.
-
----
-
-# 🔁 What Is Preemption?
-
-Preemption means:
-
-A less important job can be stopped so a more important job can run.
-
-Example story:
-
-You start training a model (low priority).  
-Then your boss asks for urgent inference results (high priority).
-
-GPU Scheduler will:
-
-1. Stop the training job.
-2. Run the urgent inference.
-3. After it finishes, resume training.
-
-No manual intervention needed.
-
----
-
-# 🖥 Example Usage
-
-Start the scheduler:
-
-```bash
-sudo PYTHONPATH=src python3 -m gpuscheduler.serve
+    R --> G[GPU-bound Processes]
+    K --> N[state/snapshot.json]
+    K --> DB[(SQLite: state/jobs.db)]
+    D --> HB[daemon_state heartbeat]
+    HB --> DB
 ```
 
-Submit a job:
+Text view:
+
+```text
+gpusched CLI -> inbox/control -> daemon -> SchedulerCore
+SchedulerCore -> QueueManager + Policy + Monitor + Runner + ACPR
+SchedulerCore -> SQLite + snapshot.json
+Runner -> GPU processes
+```
+
+---
+
+## Main Components
+
+- `gpuscheduler.cli`: unified user interface
+- `gpuscheduler.serve`: daemon entrypoint and lifecycle
+- `scheduler.core`: scheduling decisions, preemption, resume logic
+- `scheduler.queueManager`: queue state, effective priority ordering
+- `daemon.runner`: process launch/pause/resume/terminate
+- `storage.sqliteStore`: persistent jobs + daemon metadata
+- `security.*`: ACPR attestation/proof plumbing
+
+---
+
+## Unified CLI Quickstart
+
+Use either:
+
+- `./gpusched ...`
+- `PYTHONPATH=src python3 -m gpuscheduler ...`
+
+Start daemon:
 
 ```bash
-PYTHONPATH=src python3 -m gpuscheduler.submit --cmd "sleep 10" --priority 5
+./gpusched daemon start --gpus 0
+```
+
+Submit jobs:
+
+```bash
+./gpusched submit --cmd "sleep 20" --priority 10 --gpus 1 --mem 4000 --user alice
+./gpusched submit --cmd "sleep 5" --priority 1 --gpus 1 --user bob
 ```
 
 Check status:
 
 ```bash
-PYTHONPATH=src python3 -m gpuscheduler.status
+./gpusched daemon status
+./gpusched status
+./gpusched status --all --json
 ```
 
-Cancel a job:
+Logs and cancel:
 
 ```bash
-PYTHONPATH=src python3 -m gpuscheduler.cancel --jobId <job-id>
+./gpusched logs --job-id <job-id> --follow
+./gpusched cancel --job-id <job-id>
+```
+
+Stop daemon:
+
+```bash
+./gpusched daemon stop --force
 ```
 
 ---
 
-# 📸 Terminal Demo 
+## v2 Scheduling Knobs
 
-## Starting the Scheduler
+Tune scheduler behavior directly from daemon start:
 
-![Start Scheduler Screenshot](assets/start_scheduler.png)
+```bash
+./gpusched daemon start \
+  --gpus 0,1 \
+  --aging-factor 0.002 \
+  --max-concurrent-per-user 2 \
+  --fair-share-priority-penalty 0.75 \
+  --placement-mode fragmentation_aware
+```
 
----
+Placement mode options:
 
-## Submitting Jobs
-
-![Submit Job Screenshot](assets/submit_job.png)
-
----
-
-## Preemption Example
-
-![Preemption Screenshot](assets/preemption.png)
-
----
-
-## Checking Status
-
-![Status Screenshot](assets/status.png)
-
-## Job Cancellation
-
-![Status Screenshot](assets/cancellation.png)
+- `fragmentation_aware`
+- `best_fit`
+- `lowest_util`
 
 ---
 
-# 🧠 Why This Is Important
+## Current Limitations
 
-Without scheduling:
+These are known and explicit:
 
-- GPU memory conflicts happen  
-- Jobs slow each other down  
-- Experiments crash  
-- Results become unstable  
-
-With GPU Scheduler:
-
-- Important jobs run first  
-- GPU load stays controlled  
-- Experiments become predictable  
-- System remains stable  
+- Runtime limits are still enforced by polling loop, not kernel-level cgroup policing
+- ACPR is functional at framework level, but still not hardened for full enterprise trust pipelines
+- Single-node focus remains the design center in v2
 
 ---
 
-# 🧪 Concepts Demonstrated
+## Why This Project Is Resume-Strong
 
-This project demonstrates:
+It demonstrates:
 
-- Operating system scheduling  
-- Priority queues  
-- Event-driven architecture  
-- Multi-threaded programming  
-- Process control using signals  
-- Resource admission control  
-- State machine design  
-- GPU workload orchestration  
+- OS-level process control
+- Scheduling algorithms and tradeoff design
+- Fault recovery and persistence
+- Practical CLI/daemon engineering
+- Multi-GPU operational thinking
+- Real-world "productionization" steps beyond algorithm demos
 
 ---
 
-# 🛠 Future Improvements
+## Closing Note
 
-Possible next steps:
+v2 is the "serious core" version.
 
-- Memory-aware scheduling  
-- Smarter preemption scoring  
-- Fair scheduling across users  
-- Persistent job storage  
-- Live log streaming  
-- Web dashboard  
-- Multi-machine support  
+It takes GPU scheduling from idea to usable system.
 
----
-
-# 💬 Final Thought
-
-GPUs are extremely powerful.
-
-But power without control leads to chaos.
-
-GPU Scheduler adds control.
-
-And that makes GPU workloads predictable, stable, and manageable.
+v3 can build the platform around it.  
+But v2 already does real work.

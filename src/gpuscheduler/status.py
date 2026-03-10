@@ -1,45 +1,34 @@
 """
 status.py
 
-Reads scheduler state snapshot and prints job information.
+Backward-compatible wrapper for `gpusched status`.
 """
 
-import json
-from pathlib import Path
+import argparse
+
+from gpuscheduler.cli import main as cliMain
 
 
-STATE_FILE = Path("state/snapshot.json")
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--all", action="store_true")
+    parser.add_argument("--db-path", type=str, default=None)
+    parser.add_argument("--include-terminal", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
 
+    argv = ["status"]
+    if args.all:
+        argv.append("--all")
+    if args.db_path:
+        argv.extend(["--db-path", args.db_path])
+    if args.include_terminal:
+        argv.append("--include-terminal")
+    if args.json:
+        argv.append("--json")
 
-def main():
-    if not STATE_FILE.exists():
-        print("No scheduler state found.")
-        return
-
-    with open(STATE_FILE, "r") as f:
-        data = json.load(f)
-
-    print("\n=== RUNNING JOBS ===")
-    running = data.get("running", [])
-    if not running:
-        print("None")
-    else:
-        for job in running:
-            print(
-                f"{job['id']} | GPU {job.get('assignedGpu')} | "
-                f"Priority {job['priority']} | PID {job.get('pid')}"
-            )
-
-    print("\n=== QUEUED JOBS ===")
-    queued = data.get("queued", [])
-    if not queued:
-        print("None")
-    else:
-        for job in queued:
-            print(
-                f"{job['id']} | Priority {job['priority']}"
-            )
+    return cliMain(argv)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -18,7 +18,7 @@ import uuid
 import json
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 
 class JobStatus(Enum):
@@ -46,8 +46,13 @@ class Job:
     preemptible: bool = True
     maxRuntimeSeconds: Optional[int] = None
 
+    # ACPR controls
+    trustPolicy: Dict[str, Any] = field(default_factory=dict)
+    checkpointPath: Optional[str] = None
+
     # Dynamic assignment (set by scheduler)
     assignedGpu: Optional[int] = None
+    assignedGpus: List[int] = field(default_factory=list)
 
     # Lifecycle state
     status: JobStatus = JobStatus.QUEUED
@@ -58,6 +63,11 @@ class Job:
 
     # Optional user metadata
     meta: Dict[str, Any] = field(default_factory=dict)
+
+    # ACPR proof ledger fields
+    proofStatus: str = "disabled"
+    proofChain: List[Dict[str, Any]] = field(default_factory=list)
+    lastAttestation: Optional[Dict[str, Any]] = None
 
     # ----------------------------------------------------
     # Serialization
@@ -79,13 +89,31 @@ class Job:
             exclusive=bool(d.get("exclusive", True)),
             preemptible=bool(d.get("preemptible", True)),
             maxRuntimeSeconds=d.get("maxRuntimeSeconds"),
+            trustPolicy=d.get("trustPolicy", {}) or {},
+            checkpointPath=d.get("checkpointPath"),
             assignedGpu=d.get("assignedGpu"),
+            assignedGpus=[
+                int(g)
+                for g in (
+                    d.get("assignedGpus")
+                    if d.get("assignedGpus") is not None
+                    else (
+                        [d.get("assignedGpu")]
+                        if d.get("assignedGpu") is not None
+                        else []
+                    )
+                )
+                if g is not None
+            ],
             status=JobStatus(d.get("status", "queued")),
             createdAt=float(d.get("createdAt", time.time())),
             startedAt=d.get("startedAt"),
             finishedAt=d.get("finishedAt"),
             pid=d.get("pid"),
             meta=d.get("meta", {}),
+            proofStatus=d.get("proofStatus", "disabled"),
+            proofChain=d.get("proofChain", []) or [],
+            lastAttestation=d.get("lastAttestation"),
         )
 
     def toJson(self) -> str:
@@ -104,17 +132,20 @@ class Job:
         self.status = JobStatus.RUNNING
         self.startedAt = time.time()
         self.assignedGpu = gpuIndex
+        self.assignedGpus = [gpuIndex]
 
     def markFinished(self, success: bool = True) -> None:
         self.finishedAt = time.time()
         self.pid = None
         self.assignedGpu = None
+        self.assignedGpus = []
         self.status = JobStatus.FINISHED if success else JobStatus.FAILED
 
     def markCancelled(self) -> None:
         self.finishedAt = time.time()
         self.pid = None
         self.assignedGpu = None
+        self.assignedGpus = []
         self.status = JobStatus.CANCELLED
 
     # ----------------------------------------------------
@@ -123,5 +154,9 @@ class Job:
 
     def hasExceededRuntime(self) -> bool:
         if self.maxRuntimeSeconds is None or self.startedAt is None:
-            return False
-        return (time.time() - self.startedAt) > self.maxRuntimeSeconds
+            consumed = float(self.meta.get("runTimeConsumedSeconds", 0.0))
+            return consumed > float(self.maxRuntimeSeconds or 0.0)
+
+        consumed = float(self.meta.get("runTimeConsumedSeconds", 0.0))
+        consumed += max(0.0, time.time() - self.startedAt)
+        return consumed > float(self.maxRuntimeSeconds)

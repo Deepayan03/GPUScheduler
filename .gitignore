@@ -1,3 +1,10 @@
 .venv
 __pycache__
 .DS_Store
+state/proofs/
+state/signing.key
+state/*.log
+state/*.pid
+state/*.db
+state/snapshot.json
+/tmp/gpusched/
